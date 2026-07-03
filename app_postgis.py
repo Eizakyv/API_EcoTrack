@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import psycopg2
 import psycopg2.extras
 from waitress import serve
@@ -7,9 +7,8 @@ import os
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURACIÓN DE LA BASE DE DATOS (usando DATABASE_URL)
+# CONFIGURACIÓN DE LA BASE DE DATOS
 # ============================================================
-# Render provee DATABASE_URL automáticamente cuando creas una base de datos
 DATABASE_URL = os.environ['DATABASE_URL']
 
 def get_db_connection():
@@ -26,8 +25,7 @@ def check_location():
     try:
         data = request.get_json()
         if not data:
-            print("❌ Error: No se recibió JSON")
-            return "Error: JSON esperado", 400
+            return jsonify({"error": "No se recibió JSON"}), 400
 
         lat = float(data.get('latitude'))
         lon = float(data.get('longitude'))
@@ -78,48 +76,46 @@ def check_location():
         # ====================================================
         # CÁLCULO DE DISTANCIAS Y CLASIFICACIÓN
         # ====================================================
-        distancia_trail = trail['distancia'] if trail else float('inf')
-        distancia_tension = power_line['distancia'] if power_line else float('inf')
+        distancia_trail = trail['distancia'] if trail else None
+        distancia_tension = power_line['distancia'] if power_line else None
 
         status = "seguro"
         mensaje = "El usuario está seguro dentro del sendero."
 
-        if distancia_tension < POWER_LINE_THRESHOLD_METERS:
+        if distancia_tension is not None and distancia_tension < POWER_LINE_THRESHOLD_METERS:
             status = "peligro"
             mensaje = f"¡PELIGRO CRÍTICO! Cerca de línea de alta tensión ({distancia_tension:.2f} m)."
-        elif distancia_trail > TRAIL_THRESHOLD_METERS:
+        elif distancia_trail is not None and distancia_trail > TRAIL_THRESHOLD_METERS:
             status = "advertencia"
             mensaje = f"ADVERTENCIA: Fuera del sendero / Perdido ({distancia_trail:.2f} m)."
 
         # ====================================================
-        # SALIDA EN CONSOLA
+        # CONSTRUIR RESPUESTA JSON
         # ====================================================
-        print(f"\n=============================================")
-        print(f"📍 Ubicación: {lat}, {lon}")
+        response = {
+            "status": status,
+            "mensaje": mensaje,
+            "ubicacion": {
+                "latitud": lat,
+                "longitud": lon
+            },
+            "sendero": {
+                "nombre": trail['nombre'] if trail else None,
+                "distancia_metros": round(distancia_trail, 2) if distancia_trail is not None else None
+            },
+            "linea_tension": {
+                "distancia_metros": round(distancia_tension, 2) if distancia_tension is not None else None
+            }
+        }
 
-        if status == "seguro":
-            print(f"✅ Estado: {status}")
-        elif status == "advertencia":
-            print(f"⚠️ Estado: {status}")
-        else:
-            print(f"❌ Estado: {status}")
+        # También imprimimos en consola para logs (opcional)
+        print(f"\n📍 Ubicación: {lat}, {lon} | Estado: {status} | Sendero: {trail['nombre'] if trail else 'N/A'} | Dist: {distancia_trail if distancia_trail else 'N/A'}")
 
-        print(f"📝 {mensaje}")
-
-        if trail:
-            nombre = trail['nombre']
-            print(f"🌲 Sendero: '{nombre}'")
-            print(f"   Distancia: {distancia_trail:.2f} m")
-        else:
-            print("🌲 Sendero: No encontrado")
-            print("   Distancia: N/A")
-        print(f"=============================================")
-
-        return "OK", 200
+        return jsonify(response), 200
 
     except Exception as e:
         print(f"❌ Error en el servidor: {e}")
-        return f"Error: {str(e)}", 500
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
