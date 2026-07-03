@@ -78,18 +78,18 @@ def login():
             return jsonify({"error": "No se recibió JSON"}), 400
 
         username = data.get('username')
-        password_hash = data.get('password_hash')  # La app envía el hash SHA-256
+        password_hash = data.get('password_hash')
 
         if not username or not password_hash:
             return jsonify({"error": "Faltan credenciales"}), 400
 
-        # Validar que el hash tenga 64 caracteres hexadecimales (opcional)
         if len(password_hash) != 64 or not all(c in "0123456789abcdef" for c in password_hash.lower()):
             return jsonify({"error": "Hash inválido"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+        # ✅ Ahora seleccionamos id, username, role y password_hash
+        cur.execute("SELECT id, username, role, password_hash FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         cur.close()
         conn.close()
@@ -97,10 +97,18 @@ def login():
         if row is None:
             return jsonify({"success": False, "message": "Usuario no encontrado"}), 401
 
-        stored_hash = row[0]
-        # Comparar directamente los hashes
+        user_id, db_username, role, stored_hash = row
+
         if password_hash == stored_hash:
-            return jsonify({"success": True, "message": "Login exitoso"}), 200
+            return jsonify({
+                "success": True,
+                "message": "Login exitoso",
+                "user": {
+                    "id": user_id,
+                    "username": db_username,
+                    "role": role   # 🎯 Aquí incluimos el rol
+                }
+            }), 200
         else:
             return jsonify({"success": False, "message": "Contraseña incorrecta"}), 401
 
