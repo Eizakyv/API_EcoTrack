@@ -84,10 +84,10 @@ def check_location():
 
         if power_line_distance is not None and power_line_distance < POWER_LINE_THRESHOLD_METERS:
             status = "peligro"
-            message = f"¡PELIGRO CRÍTICO! Cerca de línea de alta tensión ({power_line_distance:.2f} m)."
+            message = f"Cerca de línea de alta tensión."
         elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
             status = "advertencia"
-            message = f"ADVERTENCIA: Fuera del sendero / Perdido ({trail_distance:.2f} m)."
+            message = f"Fuera del sendero / Perdido."
 
         # ====================================================
         # BUILD JSON RESPONSE WITH ENGLISH KEYS
