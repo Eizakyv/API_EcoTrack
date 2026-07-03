@@ -7,24 +7,18 @@ import os
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURACIÓN DE LA BASE DE DATOS (solo variables de entorno)
+# CONFIGURACIÓN DE LA BASE DE DATOS (usando DATABASE_URL)
 # ============================================================
-DB_CONFIG = {
-    "host": os.environ['DB_HOST'],
-    "port": int(os.environ['DB_PORT']),
-    "database": os.environ['DB_NAME'],
-    "user": os.environ['DB_USER'],
-    "password": os.environ['DB_PASSWORD']
-}
+# Render provee DATABASE_URL automáticamente cuando creas una base de datos
+DATABASE_URL = os.environ['DATABASE_URL']
+
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL)
 
 # Umbrales en metros
 TRAIL_THRESHOLD_METERS = 15.0
 POWER_LINE_THRESHOLD_METERS = 30.0
 VALID_TRAIL_TYPES = ('Sendero Actual', 'Sendero', 'Carretera')
-
-
-def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
 
 
 @app.route('/check', methods=['POST'])
@@ -98,7 +92,7 @@ def check_location():
             mensaje = f"ADVERTENCIA: Fuera del sendero / Perdido ({distancia_trail:.2f} m)."
 
         # ====================================================
-        # SALIDA SIMPLIFICADA EN CONSOLA
+        # SALIDA EN CONSOLA
         # ====================================================
         print(f"\n=============================================")
         print(f"📍 Ubicación: {lat}, {lon}")
@@ -120,8 +114,6 @@ def check_location():
             print("🌲 Sendero: No encontrado")
             print("   Distancia: N/A")
         print(f"=============================================")
-
-        print()  # Línea en blanco
 
         return "OK", 200
 
