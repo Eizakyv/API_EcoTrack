@@ -7,6 +7,7 @@ from shapely.geometry import Point, shape
 from shapely.ops import transform
 from shapely.wkt import loads
 import pyproj
+import hashlib
 
 app = Flask(__name__)
 
@@ -68,6 +69,45 @@ except Exception as e:
 # ============================================================
 # ENDPOINT /check
 # ============================================================
+
+@app.route('/login', methods=['POST'])
+def login():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No se recibió JSON"}), 400
+
+        username = data.get('username')
+        password_hash = data.get('password_hash')  # La app envía el hash SHA-256
+
+        if not username or not password_hash:
+            return jsonify({"error": "Faltan credenciales"}), 400
+
+        # Validar que el hash tenga 64 caracteres hexadecimales (opcional)
+        if len(password_hash) != 64 or not all(c in "0123456789abcdef" for c in password_hash.lower()):
+            return jsonify({"error": "Hash inválido"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if row is None:
+            return jsonify({"success": False, "message": "Usuario no encontrado"}), 401
+
+        stored_hash = row[0]
+        # Comparar directamente los hashes
+        if password_hash == stored_hash:
+            return jsonify({"success": True, "message": "Login exitoso"}), 200
+        else:
+            return jsonify({"success": False, "message": "Contraseña incorrecta"}), 401
+
+    except Exception as e:
+        print(f"❌ Error en login: {e}")
+        return jsonify({"error": str(e)}), 500
+        
 @app.route('/check', methods=['POST'])
 def check_location():
     try:
