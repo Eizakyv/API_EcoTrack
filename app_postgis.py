@@ -208,7 +208,7 @@ def check_location():
             # Fuera del parque
             if not is_inside_park and park_distance is not None:
                 status = "advertencia"
-                message = f"Fuera del parque (distancia: {park_distance:.2f} m)"
+                message = f"Fuera del parque"
             # Dentro de zona de investigación
             elif is_inside_research and research_distance is not None:
                 status = "advertencia"
@@ -220,7 +220,7 @@ def check_location():
             # Fuera del sendero
             elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
                 status = "advertencia"
-                message = f"Fuera del sendero (distancia: {trail_distance:.2f} m)"
+                message = f"Fuera del sendero"
 
         # ====================================================
         # RESPUESTA JSON
