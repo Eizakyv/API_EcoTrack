@@ -7,14 +7,14 @@ import os
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURACIÓN DE LA BASE DE DATOS
+# DATABASE CONFIGURATION
 # ============================================================
 DATABASE_URL = os.environ['DATABASE_URL']
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
-# Umbrales en metros
+# Thresholds in meters
 TRAIL_THRESHOLD_METERS = 15.0
 POWER_LINE_THRESHOLD_METERS = 30.0
 VALID_TRAIL_TYPES = ('Sendero Actual', 'Sendero', 'Carretera')
@@ -35,7 +35,7 @@ def check_location():
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
         # ----------------------------------------------------
-        # 1. SENDERO MÁS CERCANO
+        # 1. NEAREST TRAIL
         # ----------------------------------------------------
         cur.execute("""
             SELECT 
@@ -54,7 +54,7 @@ def check_location():
         trail = cur.fetchone()
 
         # ----------------------------------------------------
-        # 2. LÍNEA DE ALTA TENSIÓN MÁS CERCANA
+        # 2. NEAREST POWER LINE
         # ----------------------------------------------------
         cur.execute("""
             SELECT 
@@ -74,52 +74,52 @@ def check_location():
         conn.close()
 
         # ====================================================
-        # CÁLCULO DE DISTANCIAS Y CLASIFICACIÓN
+        # DISTANCES AND STATUS CLASSIFICATION
         # ====================================================
-        distancia_trail = trail['distancia'] if trail else None
-        distancia_tension = power_line['distancia'] if power_line else None
+        trail_distance = trail['distancia'] if trail else None
+        power_line_distance = power_line['distancia'] if power_line else None
 
         status = "seguro"
-        mensaje = "El usuario está seguro dentro del sendero."
+        message = "El usuario está seguro dentro del sendero."
 
-        if distancia_tension is not None and distancia_tension < POWER_LINE_THRESHOLD_METERS:
+        if power_line_distance is not None and power_line_distance < POWER_LINE_THRESHOLD_METERS:
             status = "peligro"
-            mensaje = f"¡PELIGRO CRÍTICO! Cerca de línea de alta tensión ({distancia_tension:.2f} m)."
-        elif distancia_trail is not None and distancia_trail > TRAIL_THRESHOLD_METERS:
+            message = f"¡PELIGRO CRÍTICO! Cerca de línea de alta tensión ({power_line_distance:.2f} m)."
+        elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
             status = "advertencia"
-            mensaje = f"ADVERTENCIA: Fuera del sendero / Perdido ({distancia_trail:.2f} m)."
+            message = f"ADVERTENCIA: Fuera del sendero / Perdido ({trail_distance:.2f} m)."
 
         # ====================================================
-        # CONSTRUIR RESPUESTA JSON
+        # BUILD JSON RESPONSE WITH ENGLISH KEYS
         # ====================================================
         response = {
-            "status": status,
-            "mensaje": mensaje,
-            "ubicacion": {
-                "latitud": lat,
-                "longitud": lon
+            "status": status,                     # "seguro", "advertencia", "peligro"
+            "message": message,                   # Texto en español
+            "location": {
+                "latitude": lat,
+                "longitude": lon
             },
-            "sendero": {
-                "nombre": trail['nombre'] if trail else None,
-                "distancia_metros": round(distancia_trail, 2) if distancia_trail is not None else None
+            "trail": {
+                "name": trail['nombre'] if trail else None,
+                "distance_meters": round(trail_distance, 2) if trail_distance is not None else None
             },
-            "linea_tension": {
-                "distancia_metros": round(distancia_tension, 2) if distancia_tension is not None else None
+            "powerLine": {
+                "distance_meters": round(power_line_distance, 2) if power_line_distance is not None else None
             }
         }
 
-        # También imprimimos en consola para logs (opcional)
-        print(f"\n📍 Ubicación: {lat}, {lon} | Estado: {status} | Sendero: {trail['nombre'] if trail else 'N/A'} | Dist: {distancia_trail if distancia_trail else 'N/A'}")
+        # Log en consola (con nombres en inglés)
+        print(f"\n📍 Location: {lat}, {lon} | Status: {status} | Trail: {trail['nombre'] if trail else 'N/A'} | Dist: {trail_distance if trail_distance else 'N/A'}")
 
         return jsonify(response), 200
 
     except Exception as e:
-        print(f"❌ Error en el servidor: {e}")
+        print(f"❌ Server error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Servidor iniciado con Waitress en http://0.0.0.0:{port}")
-    print("📡 Esperando peticiones POST en /check ...")
+    print(f"🚀 Server started with Waitress on http://0.0.0.0:{port}")
+    print("📡 Waiting for POST requests on /check ...")
     serve(app, host='0.0.0.0', port=port)
