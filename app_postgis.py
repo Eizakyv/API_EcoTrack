@@ -7,7 +7,6 @@ import json
 from shapely.geometry import Point, shape
 from shapely.ops import transform, unary_union
 import pyproj
-from shapely.wkt import dumps
 
 app = Flask(__name__)
 
@@ -25,7 +24,7 @@ POWER_LINE_THRESHOLD_METERS = 30.0
 VALID_TRAIL_TYPES = ('Sendero Actual', 'Sendero', 'Carretera')
 
 # ============================================================
-# CARGA DE CAPAS GEOJSON
+# CARGA DE CAPAS GEOJSON (para parque y zona investigación)
 # ============================================================
 wgs84 = pyproj.CRS('EPSG:4326')
 utm17n = pyproj.CRS('EPSG:32617')
@@ -33,7 +32,7 @@ project_to_meters = pyproj.Transformer.from_crs(wgs84, utm17n, always_xy=True).t
 
 park_geom = None          # polígono del parque (UTM)
 research_geom = None      # polígono de zona de investigación (UTM)
-research_wkt = None       # zona de investigación en WKT (WGS84) para usar en SQL
+research_wkt = None       # WKT de la zona de investigación (para SQL)
 
 def load_geojson_polygon(file_path):
     """Carga un GeoJSON de polígono y lo proyecta a UTM."""
@@ -48,25 +47,38 @@ def load_geojson_polygon(file_path):
         if geom.geom_type not in ['Polygon', 'MultiPolygon']:
             print(f"⚠️ {file_path} no es un polígono, es {geom.geom_type}")
             return None
+        # Transformar a UTM
         geom_utm = transform(project_to_meters, geom)
         return geom_utm
     except Exception as e:
         print(f"❌ Error al cargar {file_path}: {e}")
         return None
 
-# Cargar capas
+def get_research_zone_wkt():
+    """Devuelve la zona de investigación en WKT (SRID 4326) para usarla en SQL."""
+    try:
+        with open("parcela_1ha_pnm.geojson", 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        features = data.get('features', [])
+        if not features:
+            return None
+        geom = shape(features[0]['geometry'])
+        # Convertir a WKT en 4326
+        from shapely.geometry import mapping
+        from shapely.wkt import dumps
+        return dumps(geom)
+    except Exception as e:
+        print(f"❌ Error al obtener WKT de zona investigación: {e}")
+        return None
+
+# Cargar capas al iniciar
 try:
     park_geom = load_geojson_polygon("limites_pnm.geojson")
     research_geom = load_geojson_polygon("parcela_1ha_pnm.geojson")
+    research_wkt = get_research_zone_wkt()
     print("✅ Capas de límites y zona de investigación cargadas.")
 except Exception as e:
     print(f"❌ Error al cargar capas: {e}")
-
-# Transformar zona de investigación a WGS84 para usarla en SQL
-if research_geom is not None:
-    utm_to_wgs84 = pyproj.Transformer.from_crs(utm17n, wgs84, always_xy=True).transform
-    research_geom_wgs84 = transform(utm_to_wgs84, research_geom)
-    research_wkt = dumps(research_geom_wgs84)
 
 # ============================================================
 # ENDPOINT /check
@@ -86,37 +98,44 @@ def check_location():
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
         # ----------------------------------------------------
-        # 1. NEAREST TRAIL (fuera de la zona de investigación)
+        # 1. SENDERO MÁS CERCANO (fuera de zona de investigación)
         # ----------------------------------------------------
-        sql_trail = """
-            SELECT 
-                nombre,
-                ST_DistanceSpheroid(
-                    ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
-                    geom,
-                    'SPHEROID["WGS 84",6378137,298.257223563]'
-                ) AS distancia
-            FROM senderos
-            WHERE tipo IN %s
-        """
-        params = [point_wkt, VALID_TRAIL_TYPES]
-
+        # Si tenemos la zona de investigación, excluir senderos que estén dentro de ella
         if research_wkt is not None:
-            # Excluir senderos que intersecten la zona de investigación
-            sql_trail += """
-                AND NOT ST_Intersects(
-                    geom,
-                    ST_SetSRID(ST_GeomFromText(%s, 4326), 4326)
-                )
-            """
-            params.append(research_wkt)
+            cur.execute("""
+                SELECT 
+                    nombre,
+                    ST_DistanceSpheroid(
+                        ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
+                        geom,
+                        'SPHEROID["WGS 84",6378137,298.257223563]'
+                    ) AS distancia
+                FROM senderos
+                WHERE tipo IN %s
+                  AND NOT ST_Intersects(geom, ST_SetSRID(ST_GeomFromText(%s, 4326), 4326))
+                ORDER BY distancia
+                LIMIT 1
+            """, (point_wkt, VALID_TRAIL_TYPES, research_wkt))
+        else:
+            # Si no hay zona de investigación, buscar el más cercano sin restricción
+            cur.execute("""
+                SELECT 
+                    nombre,
+                    ST_DistanceSpheroid(
+                        ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
+                        geom,
+                        'SPHEROID["WGS 84",6378137,298.257223563]'
+                    ) AS distancia
+                FROM senderos
+                WHERE tipo IN %s
+                ORDER BY distancia
+                LIMIT 1
+            """, (point_wkt, VALID_TRAIL_TYPES))
 
-        sql_trail += " ORDER BY distancia LIMIT 1"
-        cur.execute(sql_trail, params)
         trail = cur.fetchone()
 
         # ----------------------------------------------------
-        # 2. NEAREST POWER LINE
+        # 2. LÍNEA DE ALTA TENSIÓN MÁS CERCANA
         # ----------------------------------------------------
         cur.execute("""
             SELECT 
@@ -140,7 +159,7 @@ def check_location():
         trail_distance = trail['distancia'] if trail else None
         power_line_distance = power_line['distancia'] if power_line else None
 
-        # --- Distancia al parque y zona de investigación (Shapely) ---
+        # --- Calcular distancia al parque y zona de investigación (con Shapely) ---
         user_point_wgs = Point(lon, lat)
         user_point_utm = transform(project_to_meters, user_point_wgs)
 
@@ -160,7 +179,7 @@ def check_location():
             if is_inside_research:
                 research_distance = 0.0
 
-        # --- Clasificación ---
+        # --- Clasificación (prioridad: peligro > advertencia > seguro) ---
         status = "seguro"
         message = "Se encuentra dentro del sendero."
 
@@ -171,14 +190,11 @@ def check_location():
             # Fuera del parque
             if not is_inside_park and park_distance is not None:
                 status = "advertencia"
-                message = f"Fuera del parque (distancia al parque: {park_distance:.2f} m)"
+                message = f"Fuera del parque (distancia: {park_distance:.2f} m)"
             # Dentro de zona de investigación
             elif is_inside_research and research_distance is not None:
                 status = "advertencia"
-                if trail_distance is not None:
-                    message = f"Dentro de zona de investigación (sendero más cercano fuera de la zona: {trail_distance:.2f} m)"
-                else:
-                    message = "Dentro de zona de investigación (no hay senderos fuera de la zona)"
+                message = f"Dentro de zona de investigación"
             # Fuera del sendero
             elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
                 status = "advertencia"
@@ -211,7 +227,7 @@ def check_location():
             }
         }
 
-        print(f"\n📍 Location: {lat}, {lon} | Status: {status} | Msg: {message}")
+        print(f"\n📍 Location: {lat}, {lon} | Status: {status} | Msg: {message} | TrailDist: {trail_distance if trail_distance else 'N/A'}")
 
         return jsonify(response), 200
 
