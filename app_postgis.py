@@ -30,20 +30,14 @@ wgs84 = pyproj.CRS('EPSG:4326')
 utm17n = pyproj.CRS('EPSG:32617')
 project_to_meters = pyproj.Transformer.from_crs(wgs84, utm17n, always_xy=True).transform
 
-park_geom = None          # polígono del parque (UTM)
-research_geom = None      # polígono de zona de investigación (UTM)
-plume_geom = None         # polígono de pluma grúa (UTM)
+park_geom = None
+research_geom = None
+plume_geom = None
 
 def load_geometry_from_db(table_name, geom_column='geom'):
-    """
-    Conecta a la base de datos, obtiene la primera geometría de la tabla
-    (asumiendo que hay un solo registro o que el primero es el principal)
-    y la convierte a objeto Shapely en UTM.
-    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Obtener la geometría como WKT en SRID 4326
         cur.execute(f"SELECT ST_AsText({geom_column}) FROM {table_name} LIMIT 1;")
         row = cur.fetchone()
         cur.close()
@@ -54,7 +48,6 @@ def load_geometry_from_db(table_name, geom_column='geom'):
             if geom_wgs.is_empty:
                 print(f"⚠️ Geometría vacía en {table_name}")
                 return None
-            # Proyectar a UTM (metros)
             geom_utm = transform(project_to_meters, geom_wgs)
             return geom_utm
         else:
@@ -64,7 +57,6 @@ def load_geometry_from_db(table_name, geom_column='geom'):
         print(f"❌ Error al cargar {table_name}: {e}")
         return None
 
-# Cargar capas al iniciar
 try:
     park_geom = load_geometry_from_db('limites_pnm')
     research_geom = load_geometry_from_db('parcela_1ha_pnm')
@@ -91,57 +83,21 @@ def check_location():
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
         # ----------------------------------------------------
-        # 1. SENDERO MÁS CERCANO (excluyendo los que están dentro de la parcela investigación)
+        # 1. SENDERO MÁS CERCANO (SIN EXCLUIR NINGUNO)
         # ----------------------------------------------------
-        # Obtener la parcela de investigación en WKT (si existe) para la consulta SQL
-        research_wkt = None
-        if research_geom is not None:
-            # Convertir la geometría UTM de vuelta a WGS84 para usar en SQL
-            # Para simplificar, podemos usar la tabla directamente con ST_Intersects
-            # Pero como ya tenemos la geometría en Shapely, podemos obtener su WKT en 4326
-            # Hago una consulta separada para obtener el WKT desde la tabla
-            try:
-                conn2 = get_db_connection()
-                cur2 = conn2.cursor()
-                cur2.execute("SELECT ST_AsText(geom) FROM parcela_1ha_pnm LIMIT 1;")
-                row = cur2.fetchone()
-                cur2.close()
-                conn2.close()
-                if row and row[0]:
-                    research_wkt = row[0]
-            except Exception as e:
-                print(f"⚠️ No se pudo obtener WKT de parcela: {e}")
-
-        if research_wkt is not None:
-            cur.execute("""
-                SELECT 
-                    nombre,
-                    ST_DistanceSpheroid(
-                        ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
-                        geom,
-                        'SPHEROID["WGS 84",6378137,298.257223563]'
-                    ) AS distancia
-                FROM senderos
-                WHERE tipo IN %s
-                  AND NOT ST_Intersects(geom, ST_SetSRID(ST_GeomFromText(%s, 4326), 4326))
-                ORDER BY distancia
-                LIMIT 1
-            """, (point_wkt, VALID_TRAIL_TYPES, research_wkt))
-        else:
-            cur.execute("""
-                SELECT 
-                    nombre,
-                    ST_DistanceSpheroid(
-                        ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
-                        geom,
-                        'SPHEROID["WGS 84",6378137,298.257223563]'
-                    ) AS distancia
-                FROM senderos
-                WHERE tipo IN %s
-                ORDER BY distancia
-                LIMIT 1
-            """, (point_wkt, VALID_TRAIL_TYPES))
-
+        cur.execute("""
+            SELECT 
+                nombre,
+                ST_DistanceSpheroid(
+                    ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
+                    geom,
+                    'SPHEROID["WGS 84",6378137,298.257223563]'
+                ) AS distancia
+            FROM senderos
+            WHERE tipo IN %s
+            ORDER BY distancia
+            LIMIT 1
+        """, (point_wkt, VALID_TRAIL_TYPES))
         trail = cur.fetchone()
 
         # ----------------------------------------------------
@@ -169,7 +125,6 @@ def check_location():
         trail_distance = trail['distancia'] if trail else None
         power_line_distance = power_line['distancia'] if power_line else None
 
-        # --- Calcular distancias con Shapely ---
         user_point_wgs = Point(lon, lat)
         user_point_utm = transform(project_to_meters, user_point_wgs)
 
@@ -197,7 +152,6 @@ def check_location():
             if is_inside_plume:
                 plume_distance = 0.0
 
-        # --- Clasificación (prioridad: peligro > advertencia > seguro) ---
         status = "seguro"
         message = "Se encuentra dentro del sendero."
 
@@ -205,22 +159,18 @@ def check_location():
             status = "peligro"
             message = "Cerca de línea de alta tensión."
         else:
-            # Fuera del parque
             if not is_inside_park and park_distance is not None:
                 status = "advertencia"
-                message = f"Fuera del parque"
-            # Dentro de zona de investigación
+                message = "Fuera del parque"
             elif is_inside_research and research_distance is not None:
                 status = "advertencia"
-                message = f"Dentro de zona de investigación"
-            # Dentro de pluma grúa (también advertencia, pero con mensaje específico)
+                message = "Dentro de zona de investigación"
             elif is_inside_plume and plume_distance is not None:
                 status = "advertencia"
-                message = f"Dentro de pluma grúa"
-            # Fuera del sendero
+                message = "Dentro de pluma grúa"
             elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
                 status = "advertencia"
-                message = f"Fuera del sendero"
+                message = "Fuera del sendero"
 
         # ====================================================
         # RESPUESTA JSON
