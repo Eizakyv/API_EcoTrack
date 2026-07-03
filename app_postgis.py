@@ -3,10 +3,6 @@ import psycopg2
 import psycopg2.extras
 from waitress import serve
 import os
-import json
-from shapely.geometry import Point, shape
-from shapely.ops import transform, unary_union
-import pyproj
 
 app = Flask(__name__)
 
@@ -23,66 +19,6 @@ TRAIL_THRESHOLD_METERS = 15.0
 POWER_LINE_THRESHOLD_METERS = 30.0
 VALID_TRAIL_TYPES = ('Sendero Actual', 'Sendero', 'Carretera')
 
-# ============================================================
-# CARGA DE CAPAS GEOJSON (para parque y zona investigación)
-# ============================================================
-wgs84 = pyproj.CRS('EPSG:4326')
-utm17n = pyproj.CRS('EPSG:32617')
-project_to_meters = pyproj.Transformer.from_crs(wgs84, utm17n, always_xy=True).transform
-
-park_geom = None          # polígono del parque (UTM)
-research_geom = None      # polígono de zona de investigación (UTM)
-research_wkt = None       # WKT de la zona de investigación (para SQL)
-
-def load_geojson_polygon(file_path):
-    """Carga un GeoJSON de polígono y lo proyecta a UTM."""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        features = data.get('features', [])
-        if not features:
-            print(f"⚠️ No se encontraron features en {file_path}")
-            return None
-        geom = shape(features[0]['geometry'])
-        if geom.geom_type not in ['Polygon', 'MultiPolygon']:
-            print(f"⚠️ {file_path} no es un polígono, es {geom.geom_type}")
-            return None
-        # Transformar a UTM
-        geom_utm = transform(project_to_meters, geom)
-        return geom_utm
-    except Exception as e:
-        print(f"❌ Error al cargar {file_path}: {e}")
-        return None
-
-def get_research_zone_wkt():
-    """Devuelve la zona de investigación en WKT (SRID 4326) para usarla en SQL."""
-    try:
-        with open("parcela_1ha_pnm.geojson", 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        features = data.get('features', [])
-        if not features:
-            return None
-        geom = shape(features[0]['geometry'])
-        # Convertir a WKT en 4326
-        from shapely.geometry import mapping
-        from shapely.wkt import dumps
-        return dumps(geom)
-    except Exception as e:
-        print(f"❌ Error al obtener WKT de zona investigación: {e}")
-        return None
-
-# Cargar capas al iniciar
-try:
-    park_geom = load_geojson_polygon("limites_pnm.geojson")
-    research_geom = load_geojson_polygon("parcela_1ha_pnm.geojson")
-    research_wkt = get_research_zone_wkt()
-    print("✅ Capas de límites y zona de investigación cargadas.")
-except Exception as e:
-    print(f"❌ Error al cargar capas: {e}")
-
-# ============================================================
-# ENDPOINT /check
-# ============================================================
 @app.route('/check', methods=['POST'])
 def check_location():
     try:
@@ -100,7 +36,15 @@ def check_location():
         # ----------------------------------------------------
         # 1. SENDERO MÁS CERCANO (fuera de zona de investigación)
         # ----------------------------------------------------
-        # Si tenemos la zona de investigación, excluir senderos que estén dentro de ella
+        # Primero obtenemos el polígono de la zona de investigación
+        cur.execute("""
+            SELECT ST_AsText(geom) AS wkt
+            FROM parcela_1ha_pnm
+            LIMIT 1
+        """)
+        research_zone = cur.fetchone()
+        research_wkt = research_zone['wkt'] if research_zone else None
+
         if research_wkt is not None:
             cur.execute("""
                 SELECT 
@@ -117,7 +61,6 @@ def check_location():
                 LIMIT 1
             """, (point_wkt, VALID_TRAIL_TYPES, research_wkt))
         else:
-            # Si no hay zona de investigación, buscar el más cercano sin restricción
             cur.execute("""
                 SELECT 
                     nombre,
@@ -150,6 +93,38 @@ def check_location():
         """, (point_wkt,))
         power_line = cur.fetchone()
 
+        # ----------------------------------------------------
+        # 3. VERIFICAR SI ESTÁ DENTRO DEL PARQUE
+        # ----------------------------------------------------
+        cur.execute("""
+            SELECT 
+                ST_DistanceSpheroid(
+                    ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
+                    geom,
+                    'SPHEROID["WGS 84",6378137,298.257223563]'
+                ) AS distancia,
+                ST_Contains(geom, ST_SetSRID(ST_GeomFromText(%s, 4326), 4326)) AS dentro
+            FROM limites_pnm
+            LIMIT 1
+        """, (point_wkt, point_wkt))
+        park = cur.fetchone()
+
+        # ----------------------------------------------------
+        # 4. VERIFICAR SI ESTÁ DENTRO DE ZONA DE INVESTIGACIÓN
+        # ----------------------------------------------------
+        cur.execute("""
+            SELECT 
+                ST_DistanceSpheroid(
+                    ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
+                    geom,
+                    'SPHEROID["WGS 84",6378137,298.257223563]'
+                ) AS distancia,
+                ST_Contains(geom, ST_SetSRID(ST_GeomFromText(%s, 4326), 4326)) AS dentro
+            FROM parcela_1ha_pnm
+            LIMIT 1
+        """, (point_wkt, point_wkt))
+        research = cur.fetchone()
+
         cur.close()
         conn.close()
 
@@ -159,25 +134,11 @@ def check_location():
         trail_distance = trail['distancia'] if trail else None
         power_line_distance = power_line['distancia'] if power_line else None
 
-        # --- Calcular distancia al parque y zona de investigación (con Shapely) ---
-        user_point_wgs = Point(lon, lat)
-        user_point_utm = transform(project_to_meters, user_point_wgs)
+        park_distance = park['distancia'] if park else None
+        is_inside_park = park['dentro'] if park else False
 
-        park_distance = None
-        is_inside_park = False
-        if park_geom is not None:
-            park_distance = user_point_utm.distance(park_geom)
-            is_inside_park = user_point_utm.within(park_geom)
-            if is_inside_park:
-                park_distance = 0.0
-
-        research_distance = None
-        is_inside_research = False
-        if research_geom is not None:
-            research_distance = user_point_utm.distance(research_geom)
-            is_inside_research = user_point_utm.within(research_geom)
-            if is_inside_research:
-                research_distance = 0.0
+        research_distance = research['distancia'] if research else None
+        is_inside_research = research['dentro'] if research else False
 
         # --- Clasificación (prioridad: peligro > advertencia > seguro) ---
         status = "seguro"
@@ -188,13 +149,13 @@ def check_location():
             message = "Cerca de línea de alta tensión."
         else:
             # Fuera del parque
-            if not is_inside_park and park_distance is not None:
+            if park is not None and not is_inside_park:
                 status = "advertencia"
                 message = f"Fuera del parque (distancia: {park_distance:.2f} m)"
             # Dentro de zona de investigación
-            elif is_inside_research and research_distance is not None:
+            elif research is not None and is_inside_research:
                 status = "advertencia"
-                message = f"Dentro de zona de investigación"
+                message = "Dentro de zona de investigación"
             # Fuera del sendero
             elif trail_distance is not None and trail_distance > TRAIL_THRESHOLD_METERS:
                 status = "advertencia"
@@ -227,7 +188,7 @@ def check_location():
             }
         }
 
-        print(f"\n📍 Location: {lat}, {lon} | Status: {status} | Msg: {message} | TrailDist: {trail_distance if trail_distance else 'N/A'}")
+        print(f"\n📍 Location: {lat}, {lon} | Status: {status} | Msg: {message}")
 
         return jsonify(response), 200
 
