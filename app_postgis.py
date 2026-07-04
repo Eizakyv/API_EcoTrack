@@ -235,22 +235,20 @@ def check_location():
                 status = "advertencia"
                 message = "Fuera del sendero"
 
-        # Guardar en memoria solo si está dentro del parque
-        if is_inside_park:
-            display_name = username if username else "Usuario no logeado"
-            with lock:
-                user_locations[device_id] = {
-                    "lat": lat,
-                    "lon": lon,
-                    "status": status,
-                    "trail_name": trail_name,
-                    "distance_meters": trail_distance,
-                    "display_name": display_name,
-                    "timestamp": datetime.utcnow()
-                }
-        else:
-            with lock:
-                user_locations.pop(device_id, None)
+        # ----------------------------------------------------
+        # GUARDAR UBICACIÓN SIEMPRE (sin importar si está dentro del parque)
+        # ----------------------------------------------------
+        display_name = username if username else "Usuario no logeado"
+        with lock:
+            user_locations[device_id] = {
+                "lat": lat,
+                "lon": lon,
+                "status": status,
+                "trail_name": trail_name,
+                "distance_meters": trail_distance,
+                "display_name": display_name,
+                "timestamp": datetime.utcnow()
+            }
 
         response = {
             "status": status,
@@ -276,8 +274,8 @@ def check_location():
                 "inside": is_inside_plume
             }
         }
-        
-        print(f"📍 {display_name if is_inside_park else 'Fuera'} - {lat}, {lon} → {status}")
+
+        print(f"📍 {display_name} - {lat}, {lon} → {status} (dentro: {is_inside_park})")
         return jsonify(response), 200
 
     except Exception as e:
