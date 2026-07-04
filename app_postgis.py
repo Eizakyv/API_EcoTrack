@@ -291,7 +291,9 @@ def check_location():
 def get_users_locations():
     try:
         username = request.headers.get('X-Username')
-        if not username:
+        device_id = request.headers.get('X-Device-Id')  # Nuevo header
+
+        if not username or not device_id:
             return jsonify({"error": "Falta identificación"}), 401
 
         conn = get_db_connection()
@@ -311,6 +313,9 @@ def get_users_locations():
             users_list = []
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
+                    continue
+                # Excluir el device_id que hace la consulta
+                if uid == device_id:
                     continue
                 users_list.append({
                     "display_name": data['display_name'],
