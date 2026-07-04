@@ -266,6 +266,7 @@ def check_location():
                 "display_name": display_name,
                 "role": role,
                 "is_inside_park": is_inside_park,
+                 "power_line_distance": data.get('power_line_distance'),
                 "timestamp": datetime.utcnow()
             }
 
