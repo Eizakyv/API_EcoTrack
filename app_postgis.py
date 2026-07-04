@@ -286,15 +286,17 @@ def check_location():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE Y POR DEVICE_ID
+# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE Y EXCLUYE POR device_id
 # ============================================================
 @app.route('/users/locations', methods=['GET'])
 def get_users_locations():
     try:
         username = request.headers.get('X-Username')
         device_id = request.headers.get('X-DeviceId')
-        if not username or not device_id:
-            return jsonify({"error": "Faltan identificación (X-Username y X-DeviceId)"}), 401
+        if not username:
+            return jsonify({"error": "Falta identificación"}), 401
+        if not device_id:
+            return jsonify({"error": "Falta device_id"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -314,10 +316,10 @@ def get_users_locations():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-                # Excluir el dispositivo que hace la solicitud (por device_id)
+                # EXCLUIR EL DISPOSITIVO ACTUAL POR device_id
                 if uid == device_id:
                     continue
-                # Solo incluir si está dentro del parque
+                # SOLO SI ESTÁ DENTRO DEL PARQUE
                 if not data.get('is_inside_park', False):
                     continue
                 users_list.append({
