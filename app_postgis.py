@@ -264,7 +264,7 @@ def check_location():
                 "trail_name": trail_name,
                 "distance_meters": trail_distance,
                 "display_name": display_name,
-                "role": role,  # <-- NUEVO: guardamos el rol
+                "role": role,
                 "is_inside_park": is_inside_park,
                 "timestamp": datetime.utcnow()
             }
@@ -304,14 +304,17 @@ def check_location():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE
+# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE Y EXCLUYE POR device_id
 # ============================================================
 @app.route('/users/locations', methods=['GET'])
 def get_users_locations():
     try:
         username = request.headers.get('X-Username')
+        device_id = request.headers.get('X-DeviceId')
         if not username:
             return jsonify({"error": "Falta identificación"}), 401
+        if not device_id:
+            return jsonify({"error": "Falta device_id"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -331,10 +334,10 @@ def get_users_locations():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-                # Excluir al usuario que hace la solicitud (por display_name)
-                if data['display_name'] == username:
+                # EXCLUIR EL DISPOSITIVO ACTUAL POR device_id
+                if uid == device_id:
                     continue
-                # Solo incluir si está dentro del parque
+                # SOLO SI ESTÁ DENTRO DEL PARQUE
                 if not data.get('is_inside_park', False):
                     continue
                 users_list.append({
@@ -344,7 +347,7 @@ def get_users_locations():
                     "status": data['status'],
                     "trail_name": data.get('trail_name'),
                     "distance_meters": data.get('distance_meters'),
-                    "role": data.get('role')  # <-- NUEVO: devolvemos el rol
+                    "role": data.get('role')  # <-- DEVOLVEMOS EL ROL
                 })
         return jsonify({"users": users_list}), 200
 
