@@ -347,6 +347,7 @@ def get_users_locations():
                     "status": data['status'],
                     "trail_name": data.get('trail_name'),
                     "distance_meters": data.get('distance_meters'),
+                    "power_line_distance": power_line_distance,
                     "role": data.get('role')  # <-- DEVOLVEMOS EL ROL
                 })
         return jsonify({"users": users_list}), 200
