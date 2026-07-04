@@ -253,7 +253,7 @@ def check_location():
                 print(f"⚠️ Error al obtener rol: {e}")
 
         # ----------------------------------------------------
-        # GUARDAR UBICACIÓN CON ROL
+        # GUARDAR UBICACIÓN CON ROL Y power_line_distance
         # ----------------------------------------------------
         display_name = username if username else "Usuario no logeado"
         with lock:
@@ -266,7 +266,7 @@ def check_location():
                 "display_name": display_name,
                 "role": role,
                 "is_inside_park": is_inside_park,
-                 "power_line_distance": data.get('power_line_distance'),
+                "power_line_distance": power_line_distance,  # <--- USAR EL VALOR CALCULADO
                 "timestamp": datetime.utcnow()
             }
 
@@ -348,8 +348,8 @@ def get_users_locations():
                     "status": data['status'],
                     "trail_name": data.get('trail_name'),
                     "distance_meters": data.get('distance_meters'),
-                    "power_line_distance": power_line_distance,
-                    "role": data.get('role')  # <-- DEVOLVEMOS EL ROL
+                    "role": data.get('role'),
+                    "power_line_distance": data.get('power_line_distance')  # <--- CORRECTO
                 })
         return jsonify({"users": users_list}), 200
 
