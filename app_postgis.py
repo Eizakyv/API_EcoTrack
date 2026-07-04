@@ -73,7 +73,7 @@ except Exception as e:
 # ============================================================
 # ALMACENAMIENTO EN MEMORIA DE UBICACIONES
 # ============================================================
-user_locations = {}  # key: device_id, value: {lat, lon, status, trail_name, distance_meters, display_name, timestamp}
+user_locations = {}
 lock = threading.Lock()
 
 def clean_expired_locations():
@@ -236,7 +236,7 @@ def check_location():
                 message = "Fuera del sendero"
 
         # ----------------------------------------------------
-        # GUARDAR UBICACIÓN SIEMPRE (sin importar si está dentro del parque)
+        # GUARDAR UBICACIÓN SIEMPRE (con is_inside_park)
         # ----------------------------------------------------
         display_name = username if username else "Usuario no logeado"
         with lock:
@@ -247,6 +247,7 @@ def check_location():
                 "trail_name": trail_name,
                 "distance_meters": trail_distance,
                 "display_name": display_name,
+                "is_inside_park": is_inside_park,  # <-- NUEVO
                 "timestamp": datetime.utcnow()
             }
 
@@ -285,15 +286,13 @@ def check_location():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /users/locations (solo admin/guard)
+# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE
 # ============================================================
 @app.route('/users/locations', methods=['GET'])
 def get_users_locations():
     try:
         username = request.headers.get('X-Username')
-        device_id = request.headers.get('X-Device-Id')  # Nuevo header
-
-        if not username or not device_id:
+        if not username:
             return jsonify({"error": "Falta identificación"}), 401
 
         conn = get_db_connection()
@@ -314,8 +313,11 @@ def get_users_locations():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-                # Excluir el device_id que hace la consulta
-                if uid == device_id:
+                # Excluir al usuario que hace la solicitud (por display_name)
+                if data['display_name'] == username:
+                    continue
+                # 🔒 SOLO INCLUIR SI ESTÁ DENTRO DEL PARQUE
+                if not data.get('is_inside_park', False):
                     continue
                 users_list.append({
                     "display_name": data['display_name'],
