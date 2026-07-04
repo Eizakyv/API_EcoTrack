@@ -236,7 +236,24 @@ def check_location():
                 message = "Fuera del sendero"
 
         # ----------------------------------------------------
-        # GUARDAR UBICACIÓN SIEMPRE (con is_inside_park)
+        # OBTENER ROL DEL USUARIO (si está logueado)
+        # ----------------------------------------------------
+        role = None
+        if username:
+            try:
+                conn2 = get_db_connection()
+                cur2 = conn2.cursor()
+                cur2.execute("SELECT role FROM users WHERE username = %s", (username,))
+                row2 = cur2.fetchone()
+                cur2.close()
+                conn2.close()
+                if row2:
+                    role = row2[0]
+            except Exception as e:
+                print(f"⚠️ Error al obtener rol: {e}")
+
+        # ----------------------------------------------------
+        # GUARDAR UBICACIÓN CON ROL
         # ----------------------------------------------------
         display_name = username if username else "Usuario no logeado"
         with lock:
@@ -247,6 +264,7 @@ def check_location():
                 "trail_name": trail_name,
                 "distance_meters": trail_distance,
                 "display_name": display_name,
+                "role": role,  # <-- NUEVO: guardamos el rol
                 "is_inside_park": is_inside_park,
                 "timestamp": datetime.utcnow()
             }
@@ -286,17 +304,14 @@ def check_location():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE Y EXCLUYE POR device_id
+# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE
 # ============================================================
 @app.route('/users/locations', methods=['GET'])
 def get_users_locations():
     try:
         username = request.headers.get('X-Username')
-        device_id = request.headers.get('X-DeviceId')
         if not username:
             return jsonify({"error": "Falta identificación"}), 401
-        if not device_id:
-            return jsonify({"error": "Falta device_id"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -316,10 +331,10 @@ def get_users_locations():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-                # EXCLUIR EL DISPOSITIVO ACTUAL POR device_id
-                if uid == device_id:
+                # Excluir al usuario que hace la solicitud (por display_name)
+                if data['display_name'] == username:
                     continue
-                # SOLO SI ESTÁ DENTRO DEL PARQUE
+                # Solo incluir si está dentro del parque
                 if not data.get('is_inside_park', False):
                     continue
                 users_list.append({
@@ -328,7 +343,8 @@ def get_users_locations():
                     "longitude": data['lon'],
                     "status": data['status'],
                     "trail_name": data.get('trail_name'),
-                    "distance_meters": data.get('distance_meters')
+                    "distance_meters": data.get('distance_meters'),
+                    "role": data.get('role')  # <-- NUEVO: devolvemos el rol
                 })
         return jsonify({"users": users_list}), 200
 
