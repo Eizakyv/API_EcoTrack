@@ -329,7 +329,6 @@ def get_users_locations():
         if role not in ('admin', 'guard'):
             return jsonify({"error": "Permiso denegado"}), 403
 
-        clean_expired_locations()
         now = datetime.utcnow()
         with lock:
             users_list = []
