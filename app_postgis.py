@@ -262,8 +262,21 @@ def check_location():
             },
             "powerLine": {
                 "distance_meters": round(power_line_distance, 2) if power_line_distance is not None else None
+            },
+            "park": {
+                "distance_meters": round(park_distance, 2) if park_distance is not None else None,
+                "inside": is_inside_park
+            },
+            "researchZone": {
+                "distance_meters": round(research_distance, 2) if research_distance is not None else None,
+                "inside": is_inside_research
+            },
+            "plume": {
+                "distance_meters": round(plume_distance, 2) if plume_distance is not None else None,
+                "inside": is_inside_plume
             }
         }
+        
         print(f"📍 {display_name if is_inside_park else 'Fuera'} - {lat}, {lon} → {status}")
         return jsonify(response), 200
 
