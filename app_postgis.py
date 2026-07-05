@@ -406,6 +406,10 @@ def get_dashboard_stats():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
 
+                # 🔥 SOLO PROCESAR USUARIOS DENTRO DEL PARQUE
+                if not data.get('is_inside_park', False):
+                    continue
+
                 user_role = data.get('role')
                 status = data.get('status', 'seguro')
                 trail_name = data.get('trail_name')
@@ -420,7 +424,7 @@ def get_dashboard_stats():
                 if status in ('advertencia', 'peligro'):
                     at_risk_count += 1
 
-                if trail_name:
+                if trail_name and trail_name != "Fuera de ruta":
                     if trail_name not in trails_distribution:
                         trails_distribution[trail_name] = 0
                     trails_distribution[trail_name] += 1
