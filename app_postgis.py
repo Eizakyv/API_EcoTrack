@@ -370,6 +370,9 @@ def get_map_users():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
+                # FILTRO: solo usuarios dentro del parque
+                if not data.get('is_inside_park', False):
+                    continue
                 
                 active_users.append({
                     "id": uid,
@@ -378,7 +381,8 @@ def get_map_users():
                     "longitude": data['lon'],
                     "status": data['status'],
                     "role": data.get('role', 'visitante'),
-                    "trail_name": data.get('trail_name', 'Fuera de ruta')
+                    "trail_name": data.get('trail_name', 'Fuera de ruta'),
+                    "is_inside_park": data.get('is_inside_park', False)  # por si acaso
                 })
                 
         return jsonify({"users": active_users}), 200
@@ -405,8 +409,7 @@ def get_dashboard_stats():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-
-                # 🔥 SOLO PROCESAR USUARIOS DENTRO DEL PARQUE
+                # FILTRO: solo usuarios dentro del parque
                 if not data.get('is_inside_park', False):
                     continue
 
@@ -414,6 +417,7 @@ def get_dashboard_stats():
                 status = data.get('status', 'seguro')
                 trail_name = data.get('trail_name')
 
+                # Contar roles
                 if user_role == 'admin':
                     admins_count += 1
                 elif user_role == 'guard':
@@ -421,14 +425,17 @@ def get_dashboard_stats():
                 else:
                     total_visitors += 1
 
+                # Contar en riesgo (advertencia o peligro)
                 if status in ('advertencia', 'peligro'):
                     at_risk_count += 1
 
+                # Agrupar por sendero (solo si el nombre no es "Fuera de ruta")
                 if trail_name and trail_name != "Fuera de ruta":
                     if trail_name not in trails_distribution:
                         trails_distribution[trail_name] = 0
                     trails_distribution[trail_name] += 1
 
+        # Formatear lista de senderos
         trails_list = []
         for name, count in trails_distribution.items():
             trails_list.append({
