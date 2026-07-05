@@ -358,25 +358,39 @@ def get_users_locations():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /api/dashboard/stats (PARA EL DASHBOARD HTML)
+# ENDPOINT /api/dashboard/stats (ACTUALIZADO CON TODOS LOS SENDEROS)
 # ============================================================
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
     try:
         now = datetime.utcnow()
         
-        # Inicializamos los contadores
+        # 1. Obtener TODOS los senderos desde la base de datos para que salgan en el HTML
+        all_trails = []
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT nombre FROM senderos WHERE tipo IN %s ORDER BY nombre;", (VALID_TRAIL_TYPES,))
+            rows = cur.fetchall()
+            all_trails = [row[0] for row in rows if row[0]]
+            cur.close()
+            conn.close()
+        except Exception as db_err:
+            print(f"⚠️ Error al traer lista completa de senderos: {db_err}")
+            # Fallback por si falla la BD, usamos los conocidos en memoria
+            all_trails = []
+
+        # Inicializamos los contadores globales
         total_visitors = 0
         guards_count = 0
         admins_count = 0
         at_risk_count = 0
         
-        # Diccionario para agrupar personas por sendero
-        trails_distribution = {}
+        # Inicializamos la distribución con 0 para TODOS los senderos encontrados
+        trails_distribution = {name: 0 for name in all_trails}
 
         with lock:
             for uid, data in user_locations.items():
-                # Omitir si la ubicación ya expiró (más de 10 segundos sin reportar)
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
 
@@ -384,26 +398,26 @@ def get_dashboard_stats():
                 status = data.get('status', 'seguro')
                 trail_name = data.get('trail_name')
 
-                # 1. Contar por Roles
+                # Contar por Roles
                 if user_role == 'admin':
                     admins_count += 1
                 elif user_role == 'guard':
                     guards_count += 1
                 else:
-                    # Contamos como visitante común si no es admin ni guardaparque
                     total_visitors += 1
 
-                # 2. Contar alertas de riesgo (Peligro o Advertencia)
+                # Contar alertas de riesgo
                 if status in ('advertencia', 'peligro'):
                     at_risk_count += 1
 
-                # 3. Agrupar por Sendero (solo si está en uno conocido)
+                # Agrupar por Sendero
                 if trail_name:
+                    # Si por alguna razón el nombre no estaba en la BD pero aparece en memoria, lo agregamos
                     if trail_name not in trails_distribution:
                         trails_distribution[trail_name] = 0
                     trails_distribution[trail_name] += 1
 
-        # Formatear la distribución de senderos para facilitar la lectura del HTML
+        # Formatear la lista final con todos los senderos (activos y vacíos)
         trails_list = []
         for name, count in trails_distribution.items():
             trails_list.append({
