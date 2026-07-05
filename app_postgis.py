@@ -357,6 +357,75 @@ def get_users_locations():
         print(f"❌ Error en /users/locations: {e}")
         return jsonify({"error": str(e)}), 500
 
+# ============================================================
+# ENDPOINT /api/dashboard/stats (PARA EL DASHBOARD HTML)
+# ============================================================
+@app.route('/api/dashboard/stats', methods=['GET'])
+def get_dashboard_stats():
+    try:
+        now = datetime.utcnow()
+        
+        # Inicializamos los contadores
+        total_visitors = 0
+        guards_count = 0
+        admins_count = 0
+        at_risk_count = 0
+        
+        # Diccionario para agrupar personas por sendero
+        trails_distribution = {}
+
+        with lock:
+            for uid, data in user_locations.items():
+                # Omitir si la ubicación ya expiró (más de 10 segundos sin reportar)
+                if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
+                    continue
+
+                user_role = data.get('role')
+                status = data.get('status', 'seguro')
+                trail_name = data.get('trail_name')
+
+                # 1. Contar por Roles
+                if user_role == 'admin':
+                    admins_count += 1
+                elif user_role == 'guard':
+                    guards_count += 1
+                else:
+                    # Contamos como visitante común si no es admin ni guardaparque
+                    total_visitors += 1
+
+                # 2. Contar alertas de riesgo (Peligro o Advertencia)
+                if status in ('advertencia', 'peligro'):
+                    at_risk_count += 1
+
+                # 3. Agrupar por Sendero (solo si está en uno conocido)
+                if trail_name:
+                    if trail_name not in trails_distribution:
+                        trails_distribution[trail_name] = 0
+                    trails_distribution[trail_name] += 1
+
+        # Formatear la distribución de senderos para facilitar la lectura del HTML
+        trails_list = []
+        for name, count in trails_distribution.items():
+            trails_list.append({
+                "name": name,
+                "count": count,
+                "status": "Concurrido" if count > 5 else "Normal" if count > 0 else "Despejado"
+            })
+
+        return jsonify({
+            "metrics": {
+                "visitors": total_visitors,
+                "guards": guards_count,
+                "admins": admins_count,
+                "at_risk": at_risk_count
+            },
+            "trails": trails_list
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error en /api/dashboard/stats: {e}")
+        return jsonify({"error": str(e)}), 500
+        
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Server started on http://0.0.0.0:{port}")
