@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
 from waitress import serve
@@ -13,6 +14,7 @@ import threading
 import time
 
 app = Flask(__name__)
+CORS(app)
 
 # ============================================================
 # DATABASE CONFIGURATION
@@ -29,7 +31,7 @@ VALID_TRAIL_TYPES = ('Sendero Actual', 'Sendero', 'Carretera')
 LOCATION_EXPIRY_SECONDS = 10
 
 # ============================================================
-# CARGA DE CAPAS DESDE POSTGIS
+# LOADING LAYERS FROM POSTGIS
 # ============================================================
 wgs84 = pyproj.CRS('EPSG:4326')
 utm17n = pyproj.CRS('EPSG:32617')
@@ -51,27 +53,27 @@ def load_geometry_from_db(table_name, geom_column='geom'):
             wkt = row[0]
             geom_wgs = loads(wkt)
             if geom_wgs.is_empty:
-                print(f"⚠️ Geometría vacía en {table_name}")
+                print(f"⚠️ Empty geometry in {table_name}")
                 return None
             geom_utm = transform(project_to_meters, geom_wgs)
             return geom_utm
         else:
-            print(f"⚠️ No se encontró geometría en {table_name}")
+            print(f"⚠️ No geometry found in {table_name}")
             return None
     except Exception as e:
-        print(f"❌ Error al cargar {table_name}: {e}")
+        print(f"❌ Error loading {table_name}: {e}")
         return None
 
 try:
     park_geom = load_geometry_from_db('limites_pnm')
     research_geom = load_geometry_from_db('parcela_1ha_pnm')
     plume_geom = load_geometry_from_db('pluma_grua_pnm')
-    print("✅ Capas cargadas.")
+    print("✅ Layers successfully loaded.")
 except Exception as e:
-    print(f"❌ Error al cargar capas: {e}")
+    print(f"❌ Error loading layers: {e}")
 
 # ============================================================
-# ALMACENAMIENTO EN MEMORIA DE UBICACIONES
+# IN-MEMORY USER LOCATION STORAGE
 # ============================================================
 user_locations = {}
 lock = threading.Lock()
@@ -99,14 +101,14 @@ def login():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "No se recibió JSON"}), 400
+            return jsonify({"error": "No JSON received"}), 400
 
         username = data.get('username')
         password_hash = data.get('password_hash')
         if not username or not password_hash:
-            return jsonify({"error": "Faltan credenciales"}), 400
+            return jsonify({"error": "Missing credentials"}), 400
         if len(password_hash) != 64 or not all(c in "0123456789abcdef" for c in password_hash.lower()):
-            return jsonify({"error": "Hash inválido"}), 400
+            return jsonify({"error": "Invalid hash"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -115,18 +117,18 @@ def login():
         cur.close()
         conn.close()
         if row is None:
-            return jsonify({"success": False, "message": "Usuario no encontrado"}), 401
+            return jsonify({"success": False, "message": "User not found"}), 401
         user_id, db_username, role, stored_hash = row
         if password_hash == stored_hash:
             return jsonify({
                 "success": True,
-                "message": "Login exitoso",
+                "message": "Login successful",
                 "user": {"id": user_id, "username": db_username, "role": role}
             }), 200
         else:
-            return jsonify({"success": False, "message": "Contraseña incorrecta"}), 401
+            return jsonify({"success": False, "message": "Incorrect password"}), 401
     except Exception as e:
-        print(f"❌ Error en login: {e}")
+        print(f"❌ Error in login: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
@@ -137,21 +139,21 @@ def check_location():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "No se recibió JSON"}), 400
+            return jsonify({"error": "No JSON received"}), 400
 
         lat = float(data.get('latitude'))
         lon = float(data.get('longitude'))
         device_id = data.get('device_id')
-        username = data.get('username')  # puede ser None
+        username = data.get('username')  # Can be None
 
         if not device_id:
-            return jsonify({"error": "Falta device_id"}), 400
+            return jsonify({"error": "Missing device_id"}), 400
 
         point_wkt = f"POINT({lon} {lat})"
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        # Sendero más cercano
+        # Nearest trail
         cur.execute("""
             SELECT nombre,
                    ST_DistanceSpheroid(
@@ -166,7 +168,7 @@ def check_location():
         """, (point_wkt, VALID_TRAIL_TYPES))
         trail = cur.fetchone()
 
-        # Línea de alta tensión más cercana
+        # Nearest power line
         cur.execute("""
             SELECT ST_DistanceSpheroid(
                        ST_SetSRID(ST_GeomFromText(%s, 4326), 4326),
@@ -186,7 +188,7 @@ def check_location():
         trail_name = trail['nombre'] if trail else None
         power_line_distance = power_line['distancia'] if power_line else None
 
-        # Distancias a capas geográficas
+        # Distances to geographical layers
         user_point_wgs = Point(lon, lat)
         user_point_utm = transform(project_to_meters, user_point_wgs)
 
@@ -214,7 +216,7 @@ def check_location():
             if is_inside_plume:
                 plume_distance = 0.0
 
-        # Clasificación
+        # Classification
         status = "seguro"
         message = "Se encuentra dentro del sendero."
 
@@ -236,7 +238,7 @@ def check_location():
                 message = "Fuera del sendero"
 
         # ----------------------------------------------------
-        # OBTENER ROL DEL USUARIO (si está logueado)
+        # GET USER ROLE (if logged in)
         # ----------------------------------------------------
         role = None
         if username:
@@ -250,10 +252,10 @@ def check_location():
                 if row2:
                     role = row2[0]
             except Exception as e:
-                print(f"⚠️ Error al obtener rol: {e}")
+                print(f"⚠️ Error fetching role: {e}")
 
         # ----------------------------------------------------
-        # GUARDAR UBICACIÓN CON ROL Y power_line_distance
+        # SAVE LOCATION WITH ROLE AND power_line_distance
         # ----------------------------------------------------
         display_name = username if username else "Usuario no logeado"
         with lock:
@@ -261,12 +263,12 @@ def check_location():
                 "lat": lat,
                 "lon": lon,
                 "status": status,
-                "trail_name": trail_name,
+                "trail_name": trail_name if trail_name else "Fuera de ruta",
                 "distance_meters": trail_distance,
                 "display_name": display_name,
-                "role": role,
+                "role": role if role else "visitante",
                 "is_inside_park": is_inside_park,
-                "power_line_distance": power_line_distance,  # <--- USAR EL VALOR CALCULADO
+                "power_line_distance": power_line_distance,
                 "timestamp": datetime.utcnow()
             }
 
@@ -295,17 +297,17 @@ def check_location():
             }
         }
 
-        print(f"📍 {display_name} - {lat}, {lon} → {status} (dentro: {is_inside_park})")
+        print(f"📍 {display_name} - {lat}, {lon} → {status} (inside park: {is_inside_park})")
         return jsonify(response), 200
 
     except Exception as e:
-        print(f"❌ Error en /check: {e}")
+        print(f"❌ Error in /check: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /users/locations (solo admin/guard) – FILTRADO POR PARQUE Y EXCLUYE POR device_id
+# ENDPOINT /users/locations (admin/guard only) - FILTERED BY PARK & EXCLUDES SELF BY device_id
 # ============================================================
 @app.route('/users/locations', methods=['GET'])
 def get_users_locations():
@@ -313,9 +315,9 @@ def get_users_locations():
         username = request.headers.get('X-Username')
         device_id = request.headers.get('X-DeviceId')
         if not username:
-            return jsonify({"error": "Falta identificación"}), 401
+            return jsonify({"error": "Missing identification"}), 401
         if not device_id:
-            return jsonify({"error": "Falta device_id"}), 400
+            return jsonify({"error": "Missing device_id"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -324,10 +326,10 @@ def get_users_locations():
         cur.close()
         conn.close()
         if row is None:
-            return jsonify({"error": "Usuario no encontrado"}), 401
+            return jsonify({"error": "User not found"}), 401
         role = row[0]
         if role not in ('admin', 'guard'):
-            return jsonify({"error": "Permiso denegado"}), 403
+            return jsonify({"error": "Permission denied"}), 403
 
         now = datetime.utcnow()
         with lock:
@@ -335,10 +337,8 @@ def get_users_locations():
             for uid, data in user_locations.items():
                 if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
                     continue
-                # EXCLUIR EL DISPOSITIVO ACTUAL POR device_id
                 if uid == device_id:
                     continue
-                # SOLO SI ESTÁ DENTRO DEL PARQUE
                 if not data.get('is_inside_park', False):
                     continue
                 users_list.append({
@@ -349,45 +349,57 @@ def get_users_locations():
                     "trail_name": data.get('trail_name'),
                     "distance_meters": data.get('distance_meters'),
                     "role": data.get('role'),
-                    "power_line_distance": data.get('power_line_distance')  # <--- CORRECTO
+                    "power_line_distance": data.get('power_line_distance')
                 })
         return jsonify({"users": users_list}), 200
 
     except Exception as e:
-        print(f"❌ Error en /users/locations: {e}")
+        print(f"❌ Error in /users/locations: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# ENDPOINT /api/dashboard/stats (ACTUALIZADO CON TODOS LOS SENDEROS)
+# ENDPOINT /api/map/users (FOR INTERACTIVE LEAFLET GEOVISOR)
+# ============================================================
+@app.route('/api/map/users', methods=['GET'])
+def get_map_users():
+    try:
+        now = datetime.utcnow()
+        active_users = []
+        
+        with lock:
+            for uid, data in user_locations.items():
+                if (now - data['timestamp']).total_seconds() > LOCATION_EXPIRY_SECONDS:
+                    continue
+                
+                active_users.append({
+                    "id": uid,
+                    "display_name": data['display_name'],
+                    "latitude": data['lat'],
+                    "longitude": data['lon'],
+                    "status": data['status'],
+                    "role": data.get('role', 'visitante'),
+                    "trail_name": data.get('trail_name', 'Fuera de ruta')
+                })
+                
+        return jsonify({"users": active_users}), 200
+    except Exception as e:
+        print(f"❌ Error in /api/map/users: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================
+# ENDPOINT /api/dashboard/stats (FOR HTML DASHBOARD METRICS)
 # ============================================================
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
     try:
         now = datetime.utcnow()
         
-        # 1. Obtener TODOS los senderos desde la base de datos para que salgan en el HTML
-        all_trails = []
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT nombre FROM senderos WHERE tipo IN %s ORDER BY nombre;", (VALID_TRAIL_TYPES,))
-            rows = cur.fetchall()
-            all_trails = [row[0] for row in rows if row[0]]
-            cur.close()
-            conn.close()
-        except Exception as db_err:
-            print(f"⚠️ Error al traer lista completa de senderos: {db_err}")
-            # Fallback por si falla la BD, usamos los conocidos en memoria
-            all_trails = []
-
-        # Inicializamos los contadores globales
         total_visitors = 0
         guards_count = 0
         admins_count = 0
         at_risk_count = 0
         
-        # Inicializamos la distribución con 0 para TODOS los senderos encontrados
-        trails_distribution = {name: 0 for name in all_trails}
+        trails_distribution = {}
 
         with lock:
             for uid, data in user_locations.items():
@@ -398,7 +410,6 @@ def get_dashboard_stats():
                 status = data.get('status', 'seguro')
                 trail_name = data.get('trail_name')
 
-                # Contar por Roles
                 if user_role == 'admin':
                     admins_count += 1
                 elif user_role == 'guard':
@@ -406,18 +417,14 @@ def get_dashboard_stats():
                 else:
                     total_visitors += 1
 
-                # Contar alertas de riesgo
                 if status in ('advertencia', 'peligro'):
                     at_risk_count += 1
 
-                # Agrupar por Sendero
                 if trail_name:
-                    # Si por alguna razón el nombre no estaba en la BD pero aparece en memoria, lo agregamos
                     if trail_name not in trails_distribution:
                         trails_distribution[trail_name] = 0
                     trails_distribution[trail_name] += 1
 
-        # Formatear la lista final con todos los senderos (activos y vacíos)
         trails_list = []
         for name, count in trails_distribution.items():
             trails_list.append({
@@ -437,7 +444,7 @@ def get_dashboard_stats():
         }), 200
 
     except Exception as e:
-        print(f"❌ Error en /api/dashboard/stats: {e}")
+        print(f"❌ Error in /api/dashboard/stats: {e}")
         return jsonify({"error": str(e)}), 500
         
 if __name__ == '__main__':
